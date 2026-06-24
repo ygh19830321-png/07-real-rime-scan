@@ -11,6 +11,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import android.net.Uri
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ExperimentalGetImage
 import androidx.camera.core.ImageAnalysis
@@ -224,12 +225,13 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
     fun selectDocument(documentId: String) {
         val document = documents.firstOrNull { it.id == documentId } ?: return
         val pages = document.pages.ifEmpty { listOf("") }
+        val lastPageIndex = pages.lastIndex.coerceAtLeast(0)
         _uiState.update {
             it.copy(
                 selectedDocumentId = document.id,
-                documentText = pages.firstOrNull().orEmpty(),
+                documentText = pages.getOrNull(lastPageIndex).orEmpty(),
                 pages = pages,
-                currentPageIndex = 0,
+                currentPageIndex = lastPageIndex,
                 liveText = "",
                 recognitionRate = 0,
                 bookAreaDetected = false,
@@ -837,6 +839,10 @@ fun DocumentListItem(
 fun RealRimeScanApp(viewModel: ScanViewModel = viewModel()) {
     val context = LocalContext.current
     val uiState by viewModel.uiState.collectAsState()
+    val selectedDocumentTitle = uiState.documents
+        .firstOrNull { it.id == uiState.selectedDocumentId }
+        ?.title
+        .orEmpty()
     if (uiState.selectedDocumentId == null) {
         DocumentListScreen(
             uiState = uiState,
@@ -932,6 +938,7 @@ fun RealRimeScanApp(viewModel: ScanViewModel = viewModel()) {
                 onPreviousPage = viewModel::goToPreviousPage,
                 onNextPage = viewModel::goToNextPage,
                 allPagesText = viewModel.exportAllText(),
+                exportFileName = textExportFileName(selectedDocumentTitle),
                 modifier = Modifier.weight(1f),
             )
         }
@@ -1056,7 +1063,7 @@ fun CameraOcrPreview(
             },
             modifier = Modifier
                 .align(Alignment.CenterEnd)
-                .padding(end = 12.dp),
+                .padding(end = 12.dp, top = 140.dp),
         ) {
             Text(if (convertedOnce) "재개" else "인식")
         }
@@ -1438,6 +1445,15 @@ fun EditorPanel(
 ) {
     val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
+    var pendingExportText by remember { mutableStateOf("") }
+    val exportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("text/plain"),
+    ) { uri ->
+        if (uri != null) {
+            writeTextFile(context, uri, pendingExportText)
+        }
+        pendingExportText = ""
+    }
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -1570,10 +1586,20 @@ fun EditorPanel2(
     onPreviousPage: () -> Unit,
     onNextPage: () -> Unit,
     allPagesText: String,
+    exportFileName: String,
     modifier: Modifier = Modifier,
 ) {
     val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
+    var pendingExportText by remember { mutableStateOf("") }
+    val exportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("text/plain"),
+    ) { uri ->
+        if (uri != null) {
+            writeTextFile(context, uri, pendingExportText)
+        }
+        pendingExportText = ""
+    }
 
     Column(
         modifier = modifier
@@ -1729,10 +1755,20 @@ fun EditorPanel3(
     onPreviousPage: () -> Unit,
     onNextPage: () -> Unit,
     allPagesText: String,
+    exportFileName: String,
     modifier: Modifier = Modifier,
 ) {
     val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
+    var pendingExportText by remember { mutableStateOf("") }
+    val exportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("text/plain"),
+    ) { uri ->
+        if (uri != null) {
+            writeTextFile(context, uri, pendingExportText)
+        }
+        pendingExportText = ""
+    }
 
     Column(
         modifier = modifier
@@ -2475,10 +2511,20 @@ fun EditorPanel8(
     onPreviousPage: () -> Unit,
     onNextPage: () -> Unit,
     allPagesText: String,
+    exportFileName: String,
     modifier: Modifier = Modifier,
 ) {
     val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
+    var pendingExportText by remember { mutableStateOf("") }
+    val exportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("text/plain"),
+    ) { uri ->
+        if (uri != null) {
+            writeTextFile(context, uri, pendingExportText)
+        }
+        pendingExportText = ""
+    }
 
     Column(
         modifier = modifier
@@ -2506,7 +2552,13 @@ fun EditorPanel8(
                 )
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                OutlinedButton(onClick = { exportText(context, allPagesText) }, enabled = allPagesText.isNotBlank()) {
+                OutlinedButton(
+                    onClick = {
+                        pendingExportText = allPagesText
+                        exportLauncher.launch(exportFileName)
+                    },
+                    enabled = allPagesText.isNotBlank(),
+                ) {
                     Text("전체 내보내기", color = Color.White)
                 }
                 OutlinedButton(onClick = onDeletePage) {
@@ -2727,4 +2779,19 @@ private fun exportText(context: Context, text: String) {
         putExtra(Intent.EXTRA_TEXT, text)
     }
     context.startActivity(Intent.createChooser(sendIntent, "전체 텍스트 내보내기"))
+}
+
+private fun writeTextFile(context: Context, uri: Uri, text: String) {
+    if (text.isBlank()) return
+    context.contentResolver.openOutputStream(uri)?.use { outputStream ->
+        outputStream.write(text.toByteArray(Charsets.UTF_8))
+    }
+}
+
+private fun textExportFileName(title: String): String {
+    val cleanTitle = title
+        .trim()
+        .ifBlank { "book_scan_ocr" }
+        .replace(Regex("""[\\/:*?"<>|]"""), "_")
+    return if (cleanTitle.endsWith(".txt", ignoreCase = true)) cleanTitle else "$cleanTitle.txt"
 }
